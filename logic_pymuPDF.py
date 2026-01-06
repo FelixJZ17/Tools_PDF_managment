@@ -249,3 +249,14 @@ def normalizar_a_a4(ruta_pdf):
         return True, ruta_salida
     except Exception as e:
         return False, str(e)
+    
+def obtener_pixmap_pagina(ruta_pdf, num_pagina, zoom=2.0):
+    try:
+        doc = fitz.open(ruta_pdf)
+        pagina = doc.load_page(num_pagina)
+        mat = fitz.Matrix(zoom, zoom)
+        pix = pagina.get_pixmap(matrix=mat)
+        doc.close()
+        return True, pix
+    except Exception as e:
+        return False, str(e)

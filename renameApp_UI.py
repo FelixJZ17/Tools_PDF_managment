@@ -3,7 +3,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QPushButton, QLabel, QFileDialog, 
                              QListWidget, QScrollArea, QFrame, QTableWidget, QTableWidgetItem,
                              QLineEdit, QMessageBox, QAbstractItemView, QInputDialog,
-                             QDialog, QTextEdit, QFormLayout, QRubberBand)
+                             QDialog, QTextEdit, QFormLayout, QRubberBand, QStyle)
 from PyQt6.QtCore import Qt, QRect, QSize, QPoint
 from PyQt6.QtGui import QImage, QPixmap
 import os
@@ -37,9 +37,21 @@ class DocManager(QMainWindow):
         self.setCentralWidget(main_widget)
         layout_principal = QVBoxLayout(main_widget)
 
+        # Obtener iconos estándar del sistema
+        estilo = self.style()
+        icon_borrar = estilo.standardIcon(QStyle.StandardPixmap.SP_TrashIcon)
+        icon_refrescar = estilo.standardIcon(QStyle.StandardPixmap.SP_BrowserReload)
+        icon_subir = estilo.standardIcon(QStyle.StandardPixmap.SP_FileDialogToParent)
+
         # --- SECCIÓN SUPERIOR: Directorio ---
         top_layout = QHBoxLayout()
         self.lbl_directorio = QLabel("Directorio no seleccionado")
+        
+        self.btn_subir = QPushButton()
+        self.btn_subir.setIcon(icon_subir)
+        self.btn_subir.setToolTip("Subir un nivel de carpeta")
+        self.btn_subir.clicked.connect(self.subir_directorio)
+
         btn_cambiar_dir = QPushButton("Cambiar Directorio")
         btn_cambiar_dir.clicked.connect(self.seleccionar_directorio)
         top_layout.addWidget(self.lbl_directorio, stretch=1)
@@ -807,22 +819,85 @@ class DocManager(QMainWindow):
             QMessageBox.critical(self, "Error", f"No se pudo normalizar: {resultado}")
 
     def ejecutar_modo_recorte(self):
-        if not self.ruta_archivo_actual:
-            QMessageBox.warning(self, "Atención", "Selecciona una imagen primero.")
-            return
+        if not self.ruta_archivo_actual: return
+
+        directorio_actual = os.path.dirname(self.ruta_archivo_actual)
+        ruta_para_recortar = self.ruta_archivo_actual
+        es_pdf = self.ruta_archivo_actual.lower().endswith('.pdf')
+        archivo_temporal = None
+
+        if es_pdf:
+            # 1. Generar una imagen temporal de la página actual del PDF
+            # Usamos una resolución alta (2.0) para que el recorte no pierda calidad
+            exito, pixmap_temp = logic_pymuPDF.obtener_pixmap_pagina(
+                self.ruta_archivo_actual, 
+                self.pagina_actual, # La página que el usuario ve en la preview
+                zoom=2.0 
+            )
+            if exito:
+                # Guardamos temporalmente para que la ventana de recorte pueda cargarla
+                archivo_temporal = os.path.join(directorio_actual, "temp_crop_preview.png")
+                pixmap_temp.save(archivo_temporal)
+                ruta_para_recortar = archivo_temporal
+            else:
+                QMessageBox.warning(self, "Error", "No se pudo procesar la página del PDF.")
+                return
+
+        # 2. Abrir la ventana de recorte (la misma que creamos antes)
+        ventana_crop = CropWindow(ruta_para_recortar, self)
+        
+        # Si es PDF, le pasamos la ruta original para que sepa cómo nombrar el archivo final
+        if es_pdf:
+            ventana_crop.ruta_referencia_pdf = self.ruta_archivo_actual
+
+        if ventana_crop.exec():
+            self.actualizar_indicadores()
+            self.actualizar_tabla()
             
-        extensiones_imagen = ('.jpg', '.jpeg', '.png', '.webp', '.bmp')
-        if not self.ruta_archivo_actual.lower().endswith(extensiones_imagen):
-            QMessageBox.warning(self, "Atención", "El recorte visual solo está disponible para imágenes.")
+        # Limpieza: borrar el archivo temporal si existía
+        if archivo_temporal and os.path.exists(archivo_temporal):
+            os.remove(archivo_temporal)
+
+    def eliminar_archivos_seleccionados(self):
+        items = self.tabla_archivos.selectedItems()
+        filas = sorted(list(set(item.row() for item in items)), reverse=True)
+        
+        if not filas:
             return
 
-        # Lanzamos la ventana
-        ventana_crop = CropWindow(self.ruta_archivo_actual, self)
-        if ventana_crop.exec(): # Si el usuario guardó con éxito
-            # Refrescamos la tabla y la preview
-            self.archivos_actuales = logic_images.obtener_lista_archivos(os.path.dirname(self.ruta_archivo_actual))
+        # Confirmación
+        cantidad = len(filas)
+        pregunta = f"¿Estás seguro de que quieres eliminar {cantidad} archivo(s)?"
+        resp = QMessageBox.question(self, "Eliminar", pregunta, 
+                                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        
+        if resp == QMessageBox.StandardButton.Yes:
+            for fila in filas:
+                ruta = self.archivos_actuales[fila]["ruta"]
+                try:
+                    os.remove(ruta)
+                except Exception as e:
+                    QMessageBox.critical(self, "Error", f"No se pudo eliminar {ruta}: {e}")
+            
+            self.refrescar_todo()
+
+    def refrescar_todo(self):
+        """Refresca la tabla y limpia la preview actual"""
+        if self.directorio_actual:
+            self.archivos_actuales = logic_files.obtener_lista_archivos(self.directorio_actual)
             self.actualizar_tabla()
-            QMessageBox.information(self, "Listo", "Imagen procesada correctamente.")
+            # Limpiar preview para evitar bloqueos de archivos eliminados
+            self.label_preview.setPixmap(QPixmap())
+            self.ruta_archivo_actual = None
+            self.actualizar_indicadores()
+
+    def subir_directorio(self):
+        if self.directorio_actual:
+            padre = os.path.dirname(self.directorio_actual)
+            # Comprobamos que no estemos ya en la raíz (evita errores en C:\)
+            if padre != self.directorio_actual:
+                self.directorio_actual = padre
+                self.refrescar_todo()
 
 class PhotoLabel(QLabel):
     def __init__(self, parent=None):
@@ -852,6 +927,8 @@ class CropWindow(QDialog):
     def __init__(self, ruta_imagen, parent=None):
         super().__init__(parent)
         self.ruta_original = ruta_imagen
+        self.ruta_referencia_pdf = None
+
         self.setWindowTitle("Modo Recorte - Selecciona el área con el ratón")
         self.setModal(True)
         
@@ -884,38 +961,40 @@ class CropWindow(QDialog):
 
     def procesar_y_preguntar(self):
         rect = self.canvas.get_selection_rect()
-        if rect.width() < 5 or rect.height() < 5:
-            return # Selección demasiado pequeña
-            
-        # Diálogo de decisión de archivo
+        if rect.width() < 10: return
+
+        es_origen_pdf = hasattr(self, 'ruta_referencia_pdf')
+        ruta_origen_real = self.ruta_referencia_pdf if es_origen_pdf else self.ruta_original
+
+        # os.path.splitext sobre una ruta completa nos devuelve la ruta completa sin extensión
+        ruta_base_completa, ext_original = os.path.splitext(ruta_origen_real)
+
         msg = QMessageBox(self)
-        msg.setWindowTitle("Guardar recorte")
-        msg.setText("¿Cómo quieres guardar el recorte?")
+        msg.setWindowTitle("Guardar Recorte")
         
-        b_sustituir = msg.addButton("Sustituir Original", QMessageBox.ButtonRole.ActionRole)
-        b_nuevo = msg.addButton("Crear '_crop'", QMessageBox.ButtonRole.ActionRole)
+        # Si es PDF, solo permitimos crear archivo nuevo (imagen)
+        if es_origen_pdf:
+            msg.setText("El recorte se guardará como una imagen nueva.")
+            btn_nuevo = msg.addButton("Guardar como Imagen", QMessageBox.ButtonRole.ActionRole)
+        else:
+            msg.setText("¿Cómo quieres guardar el recorte?")
+            btn_sustituir = msg.addButton("Sustituir Original", QMessageBox.ButtonRole.ActionRole)
+            btn_nuevo = msg.addButton("Crear Nuevo archivo", QMessageBox.ButtonRole.ActionRole)
+        
         msg.addButton("Cancelar", QMessageBox.ButtonRole.RejectRole)
-        
         msg.exec()
-        
-        ruta_base, ext = os.path.splitext(self.ruta_original)
-        if msg.clickedButton() == b_sustituir:
+
+        if msg.clickedButton() == btn_nuevo:
+            # El recorte de un PDF siempre será .jpg o .png
+            self.ruta_destino = f"{ruta_base_completa}_page{self.parent().pagina_actual + 1}_crop.jpg"
+        elif not es_origen_pdf and msg.clickedButton() == btn_sustituir:
             self.ruta_destino = self.ruta_original
-        elif msg.clickedButton() == b_nuevo:
-            self.ruta_destino = f"{ruta_base}_crop{ext}"
         else:
             return
 
-        # Llamar a la lógica de logic_images (el código que escala coordenadas)
-        exito = logic_images.aplicar_recorte(
-            self.ruta_original, 
-            rect, 
-            self.canvas.size(), 
-            self.ruta_destino
-        )
-        
-        if exito:
-            self.accept() # Cierra la ventana devolviendo éxitoclass CropWindow(QDialog):
+        # Ejecutar recorte final
+        logic_images.aplicar_recorte(self.ruta_original, rect, self.canvas.size(), self.ruta_destino)
+        self.accept()
     
     def __init__(self, ruta_imagen, parent=None):
         super().__init__(parent)
@@ -960,16 +1039,13 @@ class CropWindow(QDialog):
         msg.setWindowTitle("Guardar recorte")
         msg.setText("¿Cómo quieres guardar el recorte?")
         
-        b_sustituir = msg.addButton("Sustituir Original", QMessageBox.ButtonRole.ActionRole)
-        b_nuevo = msg.addButton("Crear '_crop'", QMessageBox.ButtonRole.ActionRole)
+        b_nuevo = msg.addButton("Crear 'nuevo'", QMessageBox.ButtonRole.ActionRole)
         msg.addButton("Cancelar", QMessageBox.ButtonRole.RejectRole)
         
         msg.exec()
         
         ruta_base, ext = os.path.splitext(self.ruta_original)
-        if msg.clickedButton() == b_sustituir:
-            self.ruta_destino = self.ruta_original
-        elif msg.clickedButton() == b_nuevo:
+        if msg.clickedButton() == b_nuevo:
             self.ruta_destino = f"{ruta_base}_crop{ext}"
         else:
             return
@@ -984,6 +1060,8 @@ class CropWindow(QDialog):
         
         if exito:
             self.accept() # Cierra la ventana devolviendo éxito
+        else:
+            QMessageBox.critical(self, "Error", "No se pudo crear el archivo final.")
 
 
 if __name__ == "__main__":

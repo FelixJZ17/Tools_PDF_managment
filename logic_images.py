@@ -270,7 +270,7 @@ def convertir_heic_a_jpg(ruta_heic):
     except Exception as e:
         return False, str(e)
     
-def aplicar_recorte(ruta_original, rect_ui, tamano_label, ruta_final):
+def aplicar_recorte(ruta_original, rect_ui, tamano_label, ruta_dest):
     try:
         with Image.open(ruta_original) as img:
             ancho_real, alto_real = img.size
@@ -286,7 +286,7 @@ def aplicar_recorte(ruta_original, rect_ui, tamano_label, ruta_final):
             bottom = rect_ui.bottom() * factor_y
 
             img_recortada = img.crop((left, top, right, bottom))
-            img_recortada.save(ruta_final)
+            img_recortada.save(ruta_dest, "JPEG", quality=95)
             return True
     except Exception as e:
         print(f"Error en crop: {e}")
