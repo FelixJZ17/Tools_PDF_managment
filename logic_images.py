@@ -269,3 +269,25 @@ def convertir_heic_a_jpg(ruta_heic):
         return True, ruta_salida
     except Exception as e:
         return False, str(e)
+    
+def aplicar_recorte(ruta_original, rect_ui, tamano_label, ruta_final):
+    try:
+        with Image.open(ruta_original) as img:
+            ancho_real, alto_real = img.size
+            ancho_ui, alto_ui = tamano_label.width(), tamano_label.height()
+
+            # Escalar las coordenadas de la UI a la imagen real
+            factor_x = ancho_real / ancho_ui
+            factor_y = alto_real / alto_ui
+
+            left = rect_ui.left() * factor_x
+            top = rect_ui.top() * factor_y
+            right = rect_ui.right() * factor_x
+            bottom = rect_ui.bottom() * factor_y
+
+            img_recortada = img.crop((left, top, right, bottom))
+            img_recortada.save(ruta_final)
+            return True
+    except Exception as e:
+        print(f"Error en crop: {e}")
+        return False

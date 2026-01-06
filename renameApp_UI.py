@@ -3,8 +3,8 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QPushButton, QLabel, QFileDialog, 
                              QListWidget, QScrollArea, QFrame, QTableWidget, QTableWidgetItem,
                              QLineEdit, QMessageBox, QAbstractItemView, QInputDialog,
-                             QDialog, QTextEdit, QFormLayout)
-from PyQt6.QtCore import Qt
+                             QDialog, QTextEdit, QFormLayout, QRubberBand)
+from PyQt6.QtCore import Qt, QRect, QSize, QPoint
 from PyQt6.QtGui import QImage, QPixmap
 import os
 
@@ -163,6 +163,7 @@ class DocManager(QMainWindow):
             # "Ver Metadatos": self.mostrar_ventana_metadatos, --> comento porque la otra queda más completa
             "Ver Metadatos": self.mostrar_ventana_metadatos_completos,
             "Editar Metadatos": self.mostrar_ventana_metadatos_editar,
+            "Ejecutar Modo Recorte": self.ejecutar_modo_recorte,
             # Aquí empiezan las herramientas de pdfs
             "Unir PDFs": self.unir_pdfs,
             "Crear PDF desde imágenes": self.crear_pdf_desde_imagenes,
@@ -804,6 +805,185 @@ class DocManager(QMainWindow):
             self.actualizar_tabla()
         else:
             QMessageBox.critical(self, "Error", f"No se pudo normalizar: {resultado}")
+
+    def ejecutar_modo_recorte(self):
+        if not self.ruta_archivo_actual:
+            QMessageBox.warning(self, "Atención", "Selecciona una imagen primero.")
+            return
+            
+        extensiones_imagen = ('.jpg', '.jpeg', '.png', '.webp', '.bmp')
+        if not self.ruta_archivo_actual.lower().endswith(extensiones_imagen):
+            QMessageBox.warning(self, "Atención", "El recorte visual solo está disponible para imágenes.")
+            return
+
+        # Lanzamos la ventana
+        ventana_crop = CropWindow(self.ruta_archivo_actual, self)
+        if ventana_crop.exec(): # Si el usuario guardó con éxito
+            # Refrescamos la tabla y la preview
+            self.archivos_actuales = logic_images.obtener_lista_archivos(os.path.dirname(self.ruta_archivo_actual))
+            self.actualizar_tabla()
+            QMessageBox.information(self, "Listo", "Imagen procesada correctamente.")
+
+class PhotoLabel(QLabel):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.rubberBand = QRubberBand(QRubberBand.Shape.Rectangle, self)
+        self.origin = QPoint()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.origin = event.pos()
+            self.rubberBand.setGeometry(QRect(self.origin, QSize()))
+            self.rubberBand.show()
+
+    def mouseMoveEvent(self, event):
+        if not self.origin.isNull():
+            self.rubberBand.setGeometry(QRect(self.origin, event.pos()).normalized())
+
+    def mouseReleaseEvent(self, event):
+        # Aquí es donde el usuario termina de seleccionar
+        pass 
+
+    def get_selection_rect(self):
+        # Devuelve el área seleccionada relativa a la imagen mostrada
+        return self.rubberBand.geometry()
+    
+class CropWindow(QDialog):
+    def __init__(self, ruta_imagen, parent=None):
+        super().__init__(parent)
+        self.ruta_original = ruta_imagen
+        self.setWindowTitle("Modo Recorte - Selecciona el área con el ratón")
+        self.setModal(True)
+        
+        layout = QVBoxLayout(self)
+        
+        # El visor interactivo
+        self.canvas = PhotoLabel()
+        self.pixmap_original = QPixmap(ruta_imagen)
+        
+        # Escalamos para que quepa en pantalla (ej: max 800px)
+        pixmap_redimensionado = self.pixmap_original.scaled(
+            800, 600, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
+        )
+        self.canvas.setPixmap(pixmap_redimensionado)
+        self.canvas.setFixedSize(pixmap_redimensionado.size())
+        
+        layout.addWidget(self.canvas)
+        
+        # Botones de acción
+        btns_layout = QHBoxLayout()
+        self.btn_guardar = QPushButton("Confirmar Recorte")
+        self.btn_cancelar = QPushButton("Cancelar")
+        
+        btns_layout.addWidget(self.btn_cancelar)
+        btns_layout.addWidget(self.btn_guardar)
+        layout.addLayout(btns_layout)
+        
+        self.btn_cancelar.clicked.connect(self.reject)
+        self.btn_guardar.clicked.connect(self.procesar_y_preguntar)
+
+    def procesar_y_preguntar(self):
+        rect = self.canvas.get_selection_rect()
+        if rect.width() < 5 or rect.height() < 5:
+            return # Selección demasiado pequeña
+            
+        # Diálogo de decisión de archivo
+        msg = QMessageBox(self)
+        msg.setWindowTitle("Guardar recorte")
+        msg.setText("¿Cómo quieres guardar el recorte?")
+        
+        b_sustituir = msg.addButton("Sustituir Original", QMessageBox.ButtonRole.ActionRole)
+        b_nuevo = msg.addButton("Crear '_crop'", QMessageBox.ButtonRole.ActionRole)
+        msg.addButton("Cancelar", QMessageBox.ButtonRole.RejectRole)
+        
+        msg.exec()
+        
+        ruta_base, ext = os.path.splitext(self.ruta_original)
+        if msg.clickedButton() == b_sustituir:
+            self.ruta_destino = self.ruta_original
+        elif msg.clickedButton() == b_nuevo:
+            self.ruta_destino = f"{ruta_base}_crop{ext}"
+        else:
+            return
+
+        # Llamar a la lógica de logic_images (el código que escala coordenadas)
+        exito = logic_images.aplicar_recorte(
+            self.ruta_original, 
+            rect, 
+            self.canvas.size(), 
+            self.ruta_destino
+        )
+        
+        if exito:
+            self.accept() # Cierra la ventana devolviendo éxitoclass CropWindow(QDialog):
+    
+    def __init__(self, ruta_imagen, parent=None):
+        super().__init__(parent)
+        self.ruta_original = ruta_imagen
+        self.setWindowTitle("Modo Recorte - Selecciona el área con el ratón")
+        self.setModal(True)
+        
+        layout = QVBoxLayout(self)
+        
+        # El visor interactivo
+        self.canvas = PhotoLabel()
+        self.pixmap_original = QPixmap(ruta_imagen)
+        
+        # Escalamos para que quepa en pantalla (ej: max 800px)
+        pixmap_redimensionado = self.pixmap_original.scaled(
+            800, 600, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
+        )
+        self.canvas.setPixmap(pixmap_redimensionado)
+        self.canvas.setFixedSize(pixmap_redimensionado.size())
+        
+        layout.addWidget(self.canvas)
+        
+        # Botones de acción
+        btns_layout = QHBoxLayout()
+        self.btn_guardar = QPushButton("Confirmar Recorte")
+        self.btn_cancelar = QPushButton("Cancelar")
+        
+        btns_layout.addWidget(self.btn_cancelar)
+        btns_layout.addWidget(self.btn_guardar)
+        layout.addLayout(btns_layout)
+        
+        self.btn_cancelar.clicked.connect(self.reject)
+        self.btn_guardar.clicked.connect(self.procesar_y_preguntar)
+
+    def procesar_y_preguntar(self):
+        rect = self.canvas.get_selection_rect()
+        if rect.width() < 5 or rect.height() < 5:
+            return # Selección demasiado pequeña
+            
+        # Diálogo de decisión de archivo
+        msg = QMessageBox(self)
+        msg.setWindowTitle("Guardar recorte")
+        msg.setText("¿Cómo quieres guardar el recorte?")
+        
+        b_sustituir = msg.addButton("Sustituir Original", QMessageBox.ButtonRole.ActionRole)
+        b_nuevo = msg.addButton("Crear '_crop'", QMessageBox.ButtonRole.ActionRole)
+        msg.addButton("Cancelar", QMessageBox.ButtonRole.RejectRole)
+        
+        msg.exec()
+        
+        ruta_base, ext = os.path.splitext(self.ruta_original)
+        if msg.clickedButton() == b_sustituir:
+            self.ruta_destino = self.ruta_original
+        elif msg.clickedButton() == b_nuevo:
+            self.ruta_destino = f"{ruta_base}_crop{ext}"
+        else:
+            return
+
+        # Llamar a la lógica de logic_images (el código que escala coordenadas)
+        exito = logic_images.aplicar_recorte(
+            self.ruta_original, 
+            rect, 
+            self.canvas.size(), 
+            self.ruta_destino
+        )
+        
+        if exito:
+            self.accept() # Cierra la ventana devolviendo éxito
 
 
 if __name__ == "__main__":
