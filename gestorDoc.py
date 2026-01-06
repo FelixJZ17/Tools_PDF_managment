@@ -1,16 +1,17 @@
 import sys
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QPushButton, QLabel, QFileDialog, 
-                             QListWidget, QScrollArea, QFrame, QTableWidget, QTableWidgetItem,
+                             QScrollArea, QFrame, QTableWidget, QTableWidgetItem,
                              QLineEdit, QMessageBox, QAbstractItemView, QInputDialog,
-                             QDialog, QTextEdit, QFormLayout, QRubberBand, QStyle)
-from PyQt6.QtCore import Qt, QRect, QSize, QPoint
-from PyQt6.QtGui import QImage, QPixmap
+                             QDialog, QTextEdit, QFormLayout, QStyle)
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QPixmap
 import os
 
 # Importamos nuestros módulos personalizados
 import logic_images
 import logic_pymuPDF
+from classCropWindow import CropWindow
 
 # --- Configuración (IMPORTANTE) ---
 # Si usas Windows, DEBES descomentar y ajustar esta línea con la ruta
@@ -22,11 +23,13 @@ RUTA_POPPLER = None  # Déjalo así si Poppler está en el PATH del sistema (Lin
 class DocManager(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Gestor de Documentos Poppler")
+        self.setWindowTitle("Gestor de Documentos")
         self.resize(1200, 800)
         self.archivos_actuales = []
         self.zoom_actual = 100
         self.ruta_archivo_actual = ""
+        self.directorio_actual = ""
+        self.mostrar_carpetas = False  # Empezamos solo con archivos
 
         self.init_ui()
         self.seleccionar_directorio() # Pedir directorio al iniciar
@@ -42,11 +45,13 @@ class DocManager(QMainWindow):
         icon_borrar = estilo.standardIcon(QStyle.StandardPixmap.SP_TrashIcon)
         icon_refrescar = estilo.standardIcon(QStyle.StandardPixmap.SP_BrowserReload)
         icon_subir = estilo.standardIcon(QStyle.StandardPixmap.SP_FileDialogToParent)
+        self.icon_folder_on = estilo.standardIcon(QStyle.StandardPixmap.SP_DirIcon)
+        self.icon_folder_off = estilo.standardIcon(QStyle.StandardPixmap.SP_FileIcon)
 
         # --- SECCIÓN SUPERIOR: Directorio ---
         top_layout = QHBoxLayout()
         self.lbl_directorio = QLabel("Directorio no seleccionado")
-        
+
         self.btn_subir = QPushButton()
         self.btn_subir.setIcon(icon_subir)
         self.btn_subir.setToolTip("Subir un nivel de carpeta")
@@ -55,6 +60,7 @@ class DocManager(QMainWindow):
         btn_cambiar_dir = QPushButton("Cambiar Directorio")
         btn_cambiar_dir.clicked.connect(self.seleccionar_directorio)
         top_layout.addWidget(self.lbl_directorio, stretch=1)
+        top_layout.addWidget(self.btn_subir)
         top_layout.addWidget(btn_cambiar_dir)
         layout_principal.addLayout(top_layout)
 
@@ -138,12 +144,40 @@ class DocManager(QMainWindow):
         renombrar_layout.addWidget(self.lbl_extension)
         renombrar_layout.addWidget(btn_renombrar)
         
+        # Botón ELIMINAR
+        self.btn_eliminar = QPushButton()
+        self.btn_eliminar.setIcon(icon_borrar)
+        self.btn_eliminar.setToolTip("Eliminar archivos seleccionados")
+        self.btn_eliminar.setStyleSheet("QPushButton:hover { background-color: #f44336; }") # Rojo al pasar ratón
+        self.btn_eliminar.clicked.connect(self.eliminar_archivos_seleccionados)
+        renombrar_layout.addWidget(self.btn_eliminar)
+        
         layout_principal.addLayout(renombrar_layout)
 
         # --- SECCIÓN CENTRAL: Tres columnas ---
         cuerpo_layout = QHBoxLayout()
+        layout_zona_tabla = QVBoxLayout()
+        layout_cuerpo_botones_superior = QHBoxLayout()
 
         # 1. Izquierda: Lista de archivos (Tabla con Scroll)
+        # Botón REFRESCAR
+        self.btn_refrescar = QPushButton()
+        self.btn_refrescar.setIcon(icon_refrescar)
+        self.btn_refrescar.setToolTip("Refrescar lista")
+        self.btn_refrescar.clicked.connect(self.refrescar_todo)
+
+        self.btn_toggle_carpetas = QPushButton()
+        self.btn_toggle_carpetas.setIcon(self.icon_folder_off)
+        self.btn_toggle_carpetas.setToolTip("Mostrar/Ocultar Carpetas")
+        self.btn_toggle_carpetas.setCheckable(True) # Se queda hundido/marcado
+        self.btn_toggle_carpetas.clicked.connect(self.toggle_carpetas)
+
+
+        layout_cuerpo_botones_superior.addWidget(self.btn_refrescar)
+        layout_cuerpo_botones_superior.addWidget(self.btn_toggle_carpetas)
+        layout_cuerpo_botones_superior.addStretch() # Esto empuja los botones a la izquierda
+        
+        # Tabla con el LISTADO de archivos
         self.tabla_archivos = QTableWidget(0, 3)
         self.tabla_archivos.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows) # Seleccionar fila completa
         self.tabla_archivos.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers) # No editar celdas al hacer clic
@@ -153,7 +187,10 @@ class DocManager(QMainWindow):
         self.tabla_archivos.setMinimumWidth(300)
         # CONEXIÓN CRUCIAL:
         self.tabla_archivos.itemSelectionChanged.connect(self.archivo_seleccionado)
-        cuerpo_layout.addWidget(self.tabla_archivos, stretch=1)
+        self.tabla_archivos.itemDoubleClicked.connect(self.gestionar_doble_clic)
+        layout_zona_tabla.addLayout(layout_cuerpo_botones_superior) # Primero los botones
+        layout_zona_tabla.addWidget(self.tabla_archivos, stretch=1) # Luego la tabla
+        cuerpo_layout.addLayout(layout_zona_tabla) # 
 
         # 2. Centro: Preview (Área de scroll para la imagen/PDF)
         self.preview_area = QScrollArea()
@@ -204,6 +241,7 @@ class DocManager(QMainWindow):
     def seleccionar_directorio(self):
         dir_path = QFileDialog.getExistingDirectory(self, "Seleccionar Carpeta")
         if dir_path:
+            self.directorio_actual = dir_path
             self.lbl_directorio.setText(dir_path)
             self.archivos_actuales = logic_images.obtener_lista_archivos(dir_path)
             self.actualizar_tabla()
@@ -328,10 +366,18 @@ class DocManager(QMainWindow):
             print("Ya estás en el primer archivo.")
 
     def actualizar_indicadores(self):
+        # SI NO HAY ARCHIVO SELECCIONADO, LIMPIAMOS INDICADORES Y SALIMOS
+        if self.ruta_archivo_actual is None:
+            # Aquí puedes poner los textos de los labels a vacío si quieres
+            if hasattr(self, 'label_paginas'):
+                self.preview_label.setText("Página: - / -")
+            return # Salimos de la función para que no intente hacer el .lower()    
+
         # 1. Info de archivos
         fila_actual = self.tabla_archivos.currentRow() + 1
         total_archivos = len(self.archivos_actuales)
         self.lbl_info_archivos.setText(f"{fila_actual} / {total_archivos}")
+        self.lbl_directorio.setText(self.directorio_actual)
 
         # 2. Info de Zoom
         self.lbl_info_zoom.setText(f"{self.zoom_actual}%")
@@ -884,11 +930,20 @@ class DocManager(QMainWindow):
     def refrescar_todo(self):
         """Refresca la tabla y limpia la preview actual"""
         if self.directorio_actual:
-            self.archivos_actuales = logic_files.obtener_lista_archivos(self.directorio_actual)
+            self.archivos_actuales = logic_images.obtener_lista_archivos(
+                self.directorio_actual,
+                incluir_carpetas=self.mostrar_carpetas)
             self.actualizar_tabla()
             # Limpiar preview para evitar bloqueos de archivos eliminados
-            self.label_preview.setPixmap(QPixmap())
+            self.preview_label.setPixmap(QPixmap())
             self.ruta_archivo_actual = None
+            self.pagina_actual = 0
+            self.lbl_directorio.setText(self.directorio_actual)
+
+            # Limpiar visor
+            if hasattr(self, 'label_preview'):
+                self.preview_label.setPixmap(QPixmap())
+
             self.actualizar_indicadores()
 
     def subir_directorio(self):
@@ -899,169 +954,42 @@ class DocManager(QMainWindow):
                 self.directorio_actual = padre
                 self.refrescar_todo()
 
-class PhotoLabel(QLabel):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.rubberBand = QRubberBand(QRubberBand.Shape.Rectangle, self)
-        self.origin = QPoint()
 
-    def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            self.origin = event.pos()
-            self.rubberBand.setGeometry(QRect(self.origin, QSize()))
-            self.rubberBand.show()
-
-    def mouseMoveEvent(self, event):
-        if not self.origin.isNull():
-            self.rubberBand.setGeometry(QRect(self.origin, event.pos()).normalized())
-
-    def mouseReleaseEvent(self, event):
-        # Aquí es donde el usuario termina de seleccionar
-        pass 
-
-    def get_selection_rect(self):
-        # Devuelve el área seleccionada relativa a la imagen mostrada
-        return self.rubberBand.geometry()
-    
-class CropWindow(QDialog):
-    def __init__(self, ruta_imagen, parent=None):
-        super().__init__(parent)
-        self.ruta_original = ruta_imagen
-        self.ruta_referencia_pdf = None
-
-        self.setWindowTitle("Modo Recorte - Selecciona el área con el ratón")
-        self.setModal(True)
+    def toggle_carpetas(self):
+        # Invertimos el estado
+        self.mostrar_carpetas = not self.mostrar_carpetas
         
-        layout = QVBoxLayout(self)
-        
-        # El visor interactivo
-        self.canvas = PhotoLabel()
-        self.pixmap_original = QPixmap(ruta_imagen)
-        
-        # Escalamos para que quepa en pantalla (ej: max 800px)
-        pixmap_redimensionado = self.pixmap_original.scaled(
-            800, 600, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
-        )
-        self.canvas.setPixmap(pixmap_redimensionado)
-        self.canvas.setFixedSize(pixmap_redimensionado.size())
-        
-        layout.addWidget(self.canvas)
-        
-        # Botones de acción
-        btns_layout = QHBoxLayout()
-        self.btn_guardar = QPushButton("Confirmar Recorte")
-        self.btn_cancelar = QPushButton("Cancelar")
-        
-        btns_layout.addWidget(self.btn_cancelar)
-        btns_layout.addWidget(self.btn_guardar)
-        layout.addLayout(btns_layout)
-        
-        self.btn_cancelar.clicked.connect(self.reject)
-        self.btn_guardar.clicked.connect(self.procesar_y_preguntar)
-
-    def procesar_y_preguntar(self):
-        rect = self.canvas.get_selection_rect()
-        if rect.width() < 10: return
-
-        es_origen_pdf = hasattr(self, 'ruta_referencia_pdf')
-        ruta_origen_real = self.ruta_referencia_pdf if es_origen_pdf else self.ruta_original
-
-        # os.path.splitext sobre una ruta completa nos devuelve la ruta completa sin extensión
-        ruta_base_completa, ext_original = os.path.splitext(ruta_origen_real)
-
-        msg = QMessageBox(self)
-        msg.setWindowTitle("Guardar Recorte")
-        
-        # Si es PDF, solo permitimos crear archivo nuevo (imagen)
-        if es_origen_pdf:
-            msg.setText("El recorte se guardará como una imagen nueva.")
-            btn_nuevo = msg.addButton("Guardar como Imagen", QMessageBox.ButtonRole.ActionRole)
+        # Cambiamos icono y apariencia
+        if self.mostrar_carpetas:
+            self.btn_toggle_carpetas.setIcon(self.icon_folder_on)
+            self.btn_toggle_carpetas.setStyleSheet("background-color: #D4E6F1;") # Azul clarito
         else:
-            msg.setText("¿Cómo quieres guardar el recorte?")
-            btn_sustituir = msg.addButton("Sustituir Original", QMessageBox.ButtonRole.ActionRole)
-            btn_nuevo = msg.addButton("Crear Nuevo archivo", QMessageBox.ButtonRole.ActionRole)
-        
-        msg.addButton("Cancelar", QMessageBox.ButtonRole.RejectRole)
-        msg.exec()
-
-        if msg.clickedButton() == btn_nuevo:
-            # El recorte de un PDF siempre será .jpg o .png
-            self.ruta_destino = f"{ruta_base_completa}_page{self.parent().pagina_actual + 1}_crop.jpg"
-        elif not es_origen_pdf and msg.clickedButton() == btn_sustituir:
-            self.ruta_destino = self.ruta_original
-        else:
-            return
-
-        # Ejecutar recorte final
-        logic_images.aplicar_recorte(self.ruta_original, rect, self.canvas.size(), self.ruta_destino)
-        self.accept()
-    
-    def __init__(self, ruta_imagen, parent=None):
-        super().__init__(parent)
-        self.ruta_original = ruta_imagen
-        self.setWindowTitle("Modo Recorte - Selecciona el área con el ratón")
-        self.setModal(True)
-        
-        layout = QVBoxLayout(self)
-        
-        # El visor interactivo
-        self.canvas = PhotoLabel()
-        self.pixmap_original = QPixmap(ruta_imagen)
-        
-        # Escalamos para que quepa en pantalla (ej: max 800px)
-        pixmap_redimensionado = self.pixmap_original.scaled(
-            800, 600, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
-        )
-        self.canvas.setPixmap(pixmap_redimensionado)
-        self.canvas.setFixedSize(pixmap_redimensionado.size())
-        
-        layout.addWidget(self.canvas)
-        
-        # Botones de acción
-        btns_layout = QHBoxLayout()
-        self.btn_guardar = QPushButton("Confirmar Recorte")
-        self.btn_cancelar = QPushButton("Cancelar")
-        
-        btns_layout.addWidget(self.btn_cancelar)
-        btns_layout.addWidget(self.btn_guardar)
-        layout.addLayout(btns_layout)
-        
-        self.btn_cancelar.clicked.connect(self.reject)
-        self.btn_guardar.clicked.connect(self.procesar_y_preguntar)
-
-    def procesar_y_preguntar(self):
-        rect = self.canvas.get_selection_rect()
-        if rect.width() < 5 or rect.height() < 5:
-            return # Selección demasiado pequeña
+            self.btn_toggle_carpetas.setIcon(self.icon_folder_off)
+            self.btn_toggle_carpetas.setStyleSheet("") # Normal
             
-        # Diálogo de decisión de archivo
-        msg = QMessageBox(self)
-        msg.setWindowTitle("Guardar recorte")
-        msg.setText("¿Cómo quieres guardar el recorte?")
-        
-        b_nuevo = msg.addButton("Crear 'nuevo'", QMessageBox.ButtonRole.ActionRole)
-        msg.addButton("Cancelar", QMessageBox.ButtonRole.RejectRole)
-        
-        msg.exec()
-        
-        ruta_base, ext = os.path.splitext(self.ruta_original)
-        if msg.clickedButton() == b_nuevo:
-            self.ruta_destino = f"{ruta_base}_crop{ext}"
-        else:
-            return
+        self.refrescar_todo()
 
-        # Llamar a la lógica de logic_images (el código que escala coordenadas)
-        exito = logic_images.aplicar_recorte(
-            self.ruta_original, 
-            rect, 
-            self.canvas.size(), 
-            self.ruta_destino
-        )
+    def gestionar_doble_clic(self, item):
+        # 1. Obtener el índice de la fila pulsada
+        fila = item.row()
         
-        if exito:
-            self.accept() # Cierra la ventana devolviendo éxito
+        # 2. Obtener los datos del elemento desde nuestra lista de archivos
+        datos_elemento = self.archivos_actuales[fila]
+        
+        # 3. Comprobar si es una carpeta
+        if datos_elemento["tipo"] == "Carpeta":
+            # Actualizamos la ruta actual con la ruta de la carpeta pulsada
+            self.directorio_actual = datos_elemento["ruta"]
+            
+            # Refrescamos todo para mostrar el nuevo contenido
+            self.refrescar_todo()
+            
+            # (Opcional) Limpiar la selección de la tabla
+            self.tabla_archivos.clearSelection()
         else:
-            QMessageBox.critical(self, "Error", "No se pudo crear el archivo final.")
+            # Si no es carpeta, podríamos por ejemplo abrir el archivo 
+            # con el visor predeterminado del sistema (opcional)
+            pass
 
 
 if __name__ == "__main__":

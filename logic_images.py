@@ -6,35 +6,40 @@ from PIL.ExifTags import TAGS, GPSTAGS
 import pillow_heif
 
 
-def obtener_lista_archivos(directorio):
-    extensiones_validas = ('.pdf', '.png', '.jpg', '.jpeg', '.webp')
-    lista_datos = []
-    
+def obtener_lista_archivos(directorio, incluir_carpetas=False):
+    extensiones_validas = ('.pdf', '.png', '.jpg', '.jpeg', '.webp', '.heic')
+    lista_final = []
     try:
-        for archivo in os.listdir(directorio):
-            if archivo.lower().endswith(extensiones_validas):
-                ruta_completa = os.path.join(directorio, archivo)
-                stats = os.stat(ruta_completa)
+        with os.scandir(directorio) as entries:
+            for entry in entries:
+                # Si es una carpeta y queremos mostrarlas
+                if entry.is_dir() and incluir_carpetas:
+                    stats = entry.stat()
+                    lista_final.append({
+                        "nombre": f"📁 {entry.name}", # Un emoji ayuda a distinguir
+                        "ruta": entry.path,
+                        "tamano": "--",
+                        "fecha": datetime.fromtimestamp(stats.st_mtime).strftime('%Y-%m-%d %H:%M'),
+                        "tipo": "Carpeta"
+                    })
                 
-                # Tamaño en MB o KB
-                tamano = stats.st_size / 1024
-                unidad = "KB"
-                if tamano > 1024:
-                    tamano /= 1024
-                    unidad = "MB"
-                
-                fecha = datetime.fromtimestamp(stats.st_mtime).strftime('%Y-%m-%d %H:%M')
-                
-                lista_datos.append({
-                    "nombre": archivo,
-                    "tamano": f"{tamano:.2f} {unidad}",
-                    "fecha": fecha,
-                    "ruta": ruta_completa
-                })
+                # Si es un archivo (mantenemos tu lógica actual de filtros)
+                elif entry.is_file():
+                    ext = os.path.splitext(entry.name)[1].lower()
+                    if ext in extensiones_validas:
+                        stats = entry.stat()
+                        lista_final.append({
+                            "nombre": entry.name,
+                            "ruta": entry.path,
+                            "tamano": f"{stats.st_size / 1024:.1f} KB",
+                            "fecha": datetime.fromtimestamp(stats.st_mtime).strftime('%Y-%m-%d %H:%M'),
+                            "tipo": ext.replace('.', '').upper()
+                        })
     except Exception as e:
-        print(f"Error al leer directorio: {e}")
+        print(f"Error listando: {e}")
         
-    return lista_datos
+    # Opcional: Ordenar para que las carpetas aparezcan arriba
+    return sorted(lista_final, key=lambda x: (x['tipo'] != 'Carpeta', x['nombre'].lower()))
 
 def renombrar_archivo(ruta_completa, nuevo_nombre_sin_ext):
     directorio = os.path.dirname(ruta_completa)
