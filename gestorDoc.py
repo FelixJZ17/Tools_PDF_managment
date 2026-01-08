@@ -393,24 +393,33 @@ class DocManager(QMainWindow):
         if not self.ruta_archivo_actual:
             return
 
+        nombre_anterior = os.path.basename(self.ruta_archivo_actual)
         nuevo_nombre = self.txt_nuevo_nombre.text()
         exito, resultado = logic_images.renombrar_archivo(self.ruta_archivo_actual, nuevo_nombre)
         
         if exito:
             # 1. Guardar la nueva ruta como la actual
             nueva_ruta = resultado
+
+            # Guardamos el nombre anterior para buscarlo en la lista de memoria
             
             # 2. Actualizar la lista de archivos en memoria (para no re-escanear todo)
             # o simplemente volver a cargar el directorio para ser precisos:
-            dir_actual = os.path.dirname(nueva_ruta)
             nuevo_nombre_completo = os.path.basename(nueva_ruta)
-            self.archivos_actuales = logic_images.obtener_lista_archivos(dir_actual)
             
+            # Buscamos el archivo en nuestra lista actual y solo cambiamos sus datos
+            for archivo in self.archivos_actuales:
+                if archivo["nombre"] == nombre_anterior:
+                    archivo["nombre"] = nuevo_nombre_completo
+                    archivo["ruta"] = nueva_ruta
+                    # Opcional: Podrías actualizar la fecha de modificación aquí si fuera necesario
+                    break
+
+
             # Desactivamos señales para que no se dispare 'archivo_seleccionado' mil veces
             self.tabla_archivos.blockSignals(True)
             
             # 3. Refrescar la tabla
-            self.archivos_actuales = logic_images.obtener_lista_archivos(dir_actual)
             self.actualizar_tabla()
 
             
