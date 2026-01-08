@@ -13,7 +13,7 @@ Pasos para crear el .exe de cualquier código:
 - Navega a la ruta del script que quiera tener el .exe
 - Por ejemplo "lanzador.py"
 - Ejecuta PyInstaller en tu terminal:
-    pyinstaller --noconsole --onefile --icon=app_icon.ico renameApp_UI.py
+    pyinstaller --noconsole --onefile --icon=app_icon.ico gestorDoc.py
 
     La magia de usar PyInstaller: el archivo .exe resultante es totalmente independiente.
     Aquí te explico qué sucede técnicamente para que te quedes tranquilo:
@@ -28,13 +28,13 @@ Pasos para crear el .exe de cualquier código:
 
 
 ----------------------------------------------
-AÑADIDOS:
-
-
+AÑADIDOS: 
+v1.00:
+- ✅ 2026-01-06 - recortar pagina de pdf para crear otro pdf. 
+- ✅ 2026-01-06 - navegar entre carpetas desde la propia app. 
 
 -------------------
 Posibles MEJORAS en el futuro:
-- recortar pagina de pdf para crear otro pdf. 
 - Unir 4 puntos y encuadrar la imagen ahí. 
 - Seleccionar 2 imagenes/pdf en forma de dni, y darle forma de pdf_dni_dosCaras
 
